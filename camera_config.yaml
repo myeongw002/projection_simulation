@@ -1,0 +1,28 @@
+camera:
+  model: "FLIR BFS-U3-50S5"
+  resolution: [2448, 2048]
+  pixel_size_um: 3.45
+  sensor_format: '2/3"'
+  lens_mount: "C-mount"
+
+  # pixel_size_um 대신 sensor_size_mm를 직접 넣고 싶으면 이렇게 사용
+  # sensor_size_mm: [8.4456, 7.0656]
+
+lens:
+  model: "Kowa LM5JCM"
+  focal_length_mm: 5.0
+  mount: "C-mount"
+  nominal_sensor_format: '2/3"'
+  nominal_picture_size_mm: [8.8, 6.6]
+  hfov_deg_nominal: 82.4
+  vfov_deg_nominal: 66.9
+  dfov_deg_nominal: 95.0
+  distortion_tv_percent: 0.5
+  min_focus_distance_m: 0.1
+
+estimator:
+  principal_point_mode: "pixel_center"   # pixel_center or image_center
+  distortion_coeff_count: 5
+
+output:
+  save_opencv_json: "outputs/flir_bfs_u3_50s5_kowa_lm5jcm.json"

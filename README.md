@@ -1,26 +1,30 @@
 # Pointcloud Projection Simulator
 
-This project transforms LiDAR point clouds into the camera coordinate frame and compares how they are projected onto the image plane under different focal lengths. It also provides 3D visualization of camera frustums and point clouds using Open3D.
+This project transforms LiDAR point clouds into the camera coordinate frame, compares 2D projections for multiple focal lengths, and visualizes camera frustums in 3D with Open3D.
 
 ## Key Features
 
 - Compare projection results for multiple `fx`, `fy` combinations in one run
-- Visualize projected points on top of an image background
-- Visualize 3D frustums with Open3D
-- Support point cloud inputs in `npy`, `kitti_bin`, and `pcd` formats
-- Support YAML and JSON configuration files
+- Overlay projected points on an image background (optional)
+- Visualize 3D frustums and point clouds with Open3D
+- Support `npy`, `kitti_bin`, and `pcd` point cloud formats
+- Support YAML and JSON config files for projection/frustum scripts
+- Estimate initial OpenCV camera intrinsics from camera/lens datasheet specs
 
 ## Project Structure
 
 ```text
 data/
-  images/
-  pcd/
+  kitti/
+  nuscenes/
+doc/
 outputs/
 scripts/
-  config.yaml
+  create_camera_matrix.py
   fov_compare.py
   projection.py
+camera_config.yaml
+projection_config.yaml
 ```
 
 ## Requirements
@@ -38,42 +42,58 @@ scripts/
 pip install numpy opencv-python matplotlib open3d pyyaml
 ```
 
-## How To Run
+## Quick Start
 
-### 1. 2D Projection Comparison
+### 1. (Optional) Generate initial camera intrinsics from datasheet values
 
-`scripts/projection.py` projects the same point cloud with multiple focal lengths, shows the results, and saves them.
-
-```bash
-python scripts/projection.py --config scripts/config.yaml
-```
-
-If `experiment.save_path` is a file path, the script creates a folder with the same stem and saves one image per focal length. For example, using `./outputs/focal_experiment.png` creates and saves outputs under `./outputs/focal_experiment/`.
-
-### 2. 3D Frustum Comparison
-
-`scripts/fov_compare.py` opens an Open3D window to visualize point clouds and camera frustums together.
+Use `camera_config.yaml` as input and generate OpenCV-style JSON.
 
 ```bash
-python scripts/fov_compare.py --config scripts/config.yaml
+python scripts/create_camera_matrix.py --config camera_config.yaml
 ```
 
-## Configuration
+If `output.save_opencv_json` exists in `camera_config.yaml`, JSON is saved automatically.
+You can also override output path:
 
-An example configuration is provided at `scripts/config.yaml`. Main sections are:
+```bash
+python scripts/create_camera_matrix.py --config camera_config.yaml --save-json outputs/camera_intrinsics.json
+```
 
-### `io`
+### 2. Run 2D projection focal-length comparison
+
+```bash
+python scripts/projection.py --config projection_config.yaml
+```
+
+If `experiment.save_path` is a file path, the script creates a folder with the same stem and saves one image per focal length. For example, `./outputs/focal_experiment.png` produces images under `./outputs/focal_experiment/`.
+
+### 3. Run 3D frustum comparison
+
+```bash
+python scripts/fov_compare.py --config projection_config.yaml
+```
+
+## Configuration Files
+
+This repository uses two main config files.
+
+### `projection_config.yaml`
+
+Used by `projection.py` and `fov_compare.py`.
+
+#### `io`
 
 - `points_path`: input point cloud file path
 - `points_format`: one of `npy`, `kitti_bin`, `pcd`
 - `image_path`: background image path
 
-### `camera`
+#### `camera`
 
 - `width`, `height`: image resolution
 - `cx`, `cy`: principal point
+- `dist_coeffs`: OpenCV distortion coefficients (default 5 values)
 
-### `experiment`
+#### `experiment`
 
 - `fx_list`: focal lengths to compare
 - `fy_list`: optional list for `fy`; if omitted, `fx_list` is reused
@@ -81,20 +101,52 @@ An example configuration is provided at `scripts/config.yaml`. Main sections are
 - `max_points`: maximum number of points to use
 - `point_size`: rendered point size
 - `save_path`: output path
-- `use_image_background`: whether to use the image as background
+- `use_image_background`: whether to use image background
 
-### `transform`
+#### `transform`
 
 - `T_cam_lidar`: 4x4 transform from LiDAR frame to camera frame
+- or `R` (3x3) + `t` (3,)
 
-### `open3d`
+#### `open3d`
 
 - `point_size`: Open3D point size
 - `frustum_depth`: frustum depth
-- `show_coordinate_frame`: show world coordinate frame
-- `show_camera_frame`: show camera frame
-- `add_camera_centers`: show camera center spheres
-- `background_color`: background color as `[r, g, b]`
+- `show_coordinate_frame`, `coordinate_frame_size`
+- `show_camera_frame`, `camera_frame_size`
+- `add_camera_centers`, `camera_center_radius`
+- `background_color`: `[r, g, b]`
+
+### `camera_config.yaml`
+
+Used by `create_camera_matrix.py`.
+
+#### `camera`
+
+- Camera model and resolution
+- Either `pixel_size_um` or `sensor_size_mm`
+
+#### `lens`
+
+- Lens model and focal length (`focal_length_mm`)
+- Optional nominal FOV/spec fields from datasheet
+
+#### `estimator`
+
+- `principal_point_mode`: `pixel_center` or `image_center`
+- `distortion_coeff_count`: number of placeholder distortion coefficients
+
+#### `output`
+
+- `save_opencv_json`: output JSON path
+
+## Recommended Workflow
+
+1. Fill `camera_config.yaml` with your camera/lens datasheet values.
+2. Run `create_camera_matrix.py` to get initial `fx`, `fy`, `cx`, `cy`, and placeholder distortion.
+3. Copy/adapt those values into `projection_config.yaml` (`camera` and `experiment` sections).
+4. Run `projection.py` and `fov_compare.py` for qualitative validation.
+5. Refine values with real calibration data if needed.
 
 ## Data Formats
 
@@ -106,7 +158,7 @@ An example configuration is provided at `scripts/config.yaml`. Main sections are
 ### `kitti_bin`
 
 - KITTI-style `float32` binary
-- loaded as `N x 4`, and only the first three columns are used
+- loaded as `N x 4`; only first three columns are used
 
 ### `pcd`
 
@@ -114,7 +166,7 @@ An example configuration is provided at `scripts/config.yaml`. Main sections are
 
 ## Transform Convention
 
-This project uses `T_cam_lidar`. In other words, a LiDAR point `p_lidar` is transformed to a camera-frame point `p_cam` as:
+This project uses `T_cam_lidar`.
 
 ```text
 p_cam = T_cam_lidar * p_lidar
@@ -122,35 +174,6 @@ p_cam = T_cam_lidar * p_lidar
 
 In `fov_compare.py`, the inverse transform is used internally to place frustums in the LiDAR frame.
 
-## Output
-
-- 2D projection results: saved under `outputs/`
-- Open3D visualization: displayed in a separate window
-
-See `scripts/config.yaml` for the default example settings. The current save path is `./outputs/focal_experiment.png`, and per-focal-length images are stored in a folder with the same stem.
-
-## Example Config
-
-```yaml
-io:
-  points_path: "data/kitti/pc/000000.pcd"
-  points_format: "pcd"
-  image_path: "data/kitti/images/000000.png"
-
-camera:
-  width: 1920
-  height: 1200
-  cx: 960
-  cy: 600
-
-experiment:
-  fx_list: [700, 900, 1100, 1300]
-  min_depth: 0.1
-  max_points: 100000
-  point_size: 2.0
-  save_path: "./outputs/focal_experiment.png"
-  use_image_background: false
-```
 ## Example Results
 
 ### 2D Projection Results
@@ -158,11 +181,8 @@ experiment:
 The images below show projections of the same point cloud with different focal lengths.
 
 ![fx=700, fy=700](doc/projection_fx_700.0_fy_700.0.png)
-
 ![fx=900, fy=900](doc/projection_fx_900.0_fy_900.0.png)
-
 ![fx=1100, fy=1100](doc/projection_fx_1100.0_fy_1100.0.png)
-
 ![fx=1300, fy=1300](doc/projection_fx_1300.0_fy_1300.0.png)
 
 ### 3D Frustum Comparison
@@ -173,10 +193,11 @@ Example view of camera frustums and a point cloud in Open3D.
 
 ## Troubleshooting
 
-- If you see a missing `PyYAML` error, install it with `pip install pyyaml`.
+- If `PyYAML` is missing, install with `pip install pyyaml`.
 - If `.pcd` loading fails, verify Open3D installation and file paths.
-- If projection results are empty, check `T_cam_lidar`, `min_depth`, and the input point cloud coordinate frame.
+- If projection results are empty, check `T_cam_lidar`, `min_depth`, and coordinate frame consistency.
+- If camera estimation looks off, verify units (`mm` vs `um`) in `camera_config.yaml`.
 
 ## License
 
-If no license file is included in this repository, please confirm redistribution and reuse terms with the project owner before use.
+If no license file is included in this repository, confirm redistribution and reuse terms with the project owner before use.
