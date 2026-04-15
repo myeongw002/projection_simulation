@@ -15,14 +15,14 @@ This project transforms LiDAR point clouds into the camera coordinate frame, com
 
 ```text
 data/
-  kitti/
-  nuscenes/
+  images/
+  pcd/
 doc/
 outputs/
 scripts/
   create_camera_matrix.py
   fov_compare.py
-  projection.py
+  projection_compare.py
 camera_config.yaml
 projection_config.yaml
 ```
