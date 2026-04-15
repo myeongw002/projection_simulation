@@ -8,6 +8,7 @@ camera:
   height: 1200
   cx: 960
   cy: 600
+  dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
 
 experiment:
   fx_list: [700, 900, 1100, 1300]

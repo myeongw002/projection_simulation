@@ -52,6 +52,7 @@ class ExperimentConfig:
 
     cx: Optional[float]
     cy: Optional[float]
+    dist_coeffs: np.ndarray
 
     min_depth: float
     max_points: int
@@ -170,6 +171,9 @@ def build_experiment_config(raw: Dict[str, Any]) -> ExperimentConfig:
     fy_list_raw = exp_cfg.get("fy_list", None)
     fy_list = [float(x) for x in fy_list_raw] if fy_list_raw is not None else None
 
+    dist_coeffs_raw = cam_cfg.get("dist_coeffs", [0.0, 0.0, 0.0, 0.0, 0.0])
+    dist_coeffs = np.array(dist_coeffs_raw, dtype=np.float64).reshape(-1, 1)
+
     cfg = ExperimentConfig(
         points_path=io_cfg.get("points_path", None),
         points_format=str(io_cfg.get("points_format", "npy")).lower(),
@@ -183,6 +187,7 @@ def build_experiment_config(raw: Dict[str, Any]) -> ExperimentConfig:
 
         cx=float(cam_cfg["cx"]) if cam_cfg.get("cx", None) is not None else None,
         cy=float(cam_cfg["cy"]) if cam_cfg.get("cy", None) is not None else None,
+        dist_coeffs=dist_coeffs,
 
         min_depth=float(exp_cfg.get("min_depth", 0.1)),
         max_points=int(exp_cfg.get("max_points", 30000)),
@@ -334,32 +339,61 @@ def transform_points(points_lidar: np.ndarray, T_cam_lidar: np.ndarray) -> np.nd
 
 
 def project_points(
-    points_cam: np.ndarray,
+    points_lidar: np.ndarray,
+    T_cam_lidar: np.ndarray,
     intr: CameraIntrinsics,
+    dist_coeffs: np.ndarray,
     min_depth: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    X = points_cam[:, 0]
-    Y = points_cam[:, 1]
-    Z = points_cam[:, 2]
+    """
+    Use cv2.projectPoints with distortion coefficients.
 
-    valid = Z > min_depth
-    X = X[valid]
-    Y = Y[valid]
-    Z = Z[valid]
+    Returns:
+        uv_in_img: [M, 2]
+        depth_in_img: [M]
+    """
+    if points_lidar.ndim != 2 or points_lidar.shape[1] != 3:
+        raise ValueError("points_lidar must have shape [N, 3].")
 
-    u = intr.fx * (X / Z) + intr.cx
-    v = intr.fy * (Y / Z) + intr.cy
+    if T_cam_lidar.shape != (4, 4):
+        raise ValueError("T_cam_lidar must have shape [4, 4].")
 
-    uv = np.stack([u, v], axis=1)
+    R = T_cam_lidar[:3, :3]
+    t = T_cam_lidar[:3, 3]
+
+    # depth 계산용: camera 좌표계로 변환
+    points_cam = transform_points(points_lidar, T_cam_lidar)
+    depth = points_cam[:, 2]
+
+    valid_depth = depth > min_depth
+    if not np.any(valid_depth):
+        return np.empty((0, 2), dtype=np.float64), np.empty((0,), dtype=np.float64)
+
+    points_lidar_valid = points_lidar[valid_depth]
+    depth_valid = depth[valid_depth]
+
+    camera_matrix = intr.K()
+    rvec, _ = cv2.Rodrigues(R)
+    tvec = t.reshape(3, 1).astype(np.float64)
+
+    image_points, _ = cv2.projectPoints(
+        objectPoints=points_lidar_valid.astype(np.float64),
+        rvec=rvec,
+        tvec=tvec,
+        cameraMatrix=camera_matrix,
+        distCoeffs=dist_coeffs.astype(np.float64),
+    )
+
+    uv = image_points.reshape(-1, 2)
 
     in_img = (
-        (uv[:, 0] >= 0)
+        (uv[:, 0] >= 0.0)
         & (uv[:, 0] < intr.width)
-        & (uv[:, 1] >= 0)
+        & (uv[:, 1] >= 0.0)
         & (uv[:, 1] < intr.height)
     )
 
-    return uv[in_img], Z[in_img]
+    return uv[in_img], depth_valid[in_img]
 
 
 # =========================
@@ -449,7 +483,13 @@ def run_experiment(cfg: ExperimentConfig) -> None:
             height=cfg.height,
         )
 
-        uv, depth = project_points(points_cam, intr, min_depth=cfg.min_depth)
+        uv, depth = project_points(
+            points_lidar=points_lidar,
+            T_cam_lidar=cfg.T_cam_lidar,
+            intr=intr,
+            dist_coeffs=cfg.dist_coeffs,
+            min_depth=cfg.min_depth
+        )
         projection_results.append((fx, fy, uv, depth))
 
         if len(depth) > 0:

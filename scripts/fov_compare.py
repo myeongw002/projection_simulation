@@ -259,6 +259,41 @@ def transform_points(T: np.ndarray, pts: np.ndarray) -> np.ndarray:
     return out[:, :3]
 
 
+def compute_reference_scaled_frustum_depths(
+    fx_list: List[float],
+    fy_list: List[float],
+    ref_depth: float,
+    mode: str = "fx",
+) -> List[float]:
+    """
+    가장 긴 초점거리를 기준으로 frustum depth를 비례 축소.
+
+    mode:
+      - "fx": fx 기준
+      - "fy": fy 기준
+      - "min": min(fx/fx_max, fy/fy_max)
+    """
+    fx_arr = np.array(fx_list, dtype=np.float64)
+    fy_arr = np.array(fy_list, dtype=np.float64)
+
+    fx_max = float(fx_arr.max())
+    fy_max = float(fy_arr.max())
+
+    depths = []
+    for fx, fy in zip(fx_arr, fy_arr):
+        if mode == "fx":
+            scale = fx / fx_max
+        elif mode == "fy":
+            scale = fy / fy_max
+        elif mode == "min":
+            scale = min(fx / fx_max, fy / fy_max)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}")
+
+        depths.append(ref_depth * scale * 0.8)
+
+    return depths
+
 def make_frustum_lineset_from_T_lidar_cam(
     width: int,
     height: int,
@@ -356,14 +391,122 @@ def color_palette(n: int) -> List[Tuple[float, float, float]]:
 def fov_deg(image_size: int, focal: float) -> float:
     return float(np.degrees(2.0 * np.arctan(image_size / (2.0 * focal))))
 
+def compute_in_frustum_mask(
+    points_cam: np.ndarray,
+    width: int,
+    height: int,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+) -> np.ndarray:
+    """
+    points_cam: camera 좌표계 [N, 3]
+    return: 각 점이 해당 frustum 안에 있는지 bool mask [N]
+
+    far plane은 고정 frustum_depth가 아니라,
+    카메라 전방(Z > 0)에 있는 점들 중 가장 먼 점의 Z를 사용한다.
+    """
+    X = points_cam[:, 0]
+    Y = points_cam[:, 1]
+    Z = points_cam[:, 2]
+
+    forward_mask = Z > 0.0
+    if not np.any(forward_mask):
+        return np.zeros(points_cam.shape[0], dtype=bool)
+
+    far_depth = float(Z[forward_mask].max())
+
+    mask = Z > 0.0
+    mask &= Z <= far_depth
+
+    u = np.empty_like(Z)
+    v = np.empty_like(Z)
+
+    u[forward_mask] = fx * (X[forward_mask] / Z[forward_mask]) + cx
+    v[forward_mask] = fy * (Y[forward_mask] / Z[forward_mask]) + cy
+
+    mask &= (u >= 0.0) & (u <= (width - 1.0))
+    mask &= (v >= 0.0) & (v <= (height - 1.0))
+
+    return mask
+
+def make_layer_colored_point_cloud(
+    points_lidar: np.ndarray,
+    cfg: Open3DFrustumConfig,
+    fx_list: List[float],
+    fy_list: List[float],
+    frustum_colors: List[Tuple[float, float, float]],
+    outside_color: Tuple[float, float, float] = (0.5, 0.5, 0.5),
+) -> Tuple[o3d.geometry.PointCloud, np.ndarray, List[np.ndarray]]:
+    """
+    FOV가 넓은 것부터 좁은 것까지 계층적으로 점에 색을 칠한다.
+
+    반환:
+      - 색칠된 point cloud
+      - widest -> narrowest 순으로 정렬된 frustum 인덱스
+      - 각 frustum의 inside mask 리스트
+    """
+    # 최종 표시될 포인트 기준으로 먼저 voxel downsample 적용
+    pcd = make_point_cloud(points_lidar, cfg.voxel_size)
+    points_disp = np.asarray(pcd.points, dtype=np.float64)
+
+    # LiDAR -> Camera
+    points_cam = transform_points(cfg.T_cam_lidar, points_disp)
+
+    # 각 frustum별 mask 계산
+    masks: List[np.ndarray] = []
+    fov_x_list: List[float] = []
+
+    for fx, fy in zip(fx_list, fy_list):
+        masks.append(
+            compute_in_frustum_mask(
+                points_cam=points_cam,
+                width=cfg.camera.width,
+                height=cfg.camera.height,
+                fx=fx,
+                fy=fy,
+                cx=cfg.camera.cx,
+                cy=cfg.camera.cy,
+            )
+        )
+        fov_x_list.append(fov_deg(cfg.camera.width, fx))
+
+    # widest -> narrowest
+    sorted_indices = np.argsort(np.array(fov_x_list))[::-1]
+
+    colors_arr = np.tile(
+        np.array(outside_color, dtype=np.float64),
+        (points_disp.shape[0], 1),
+    )
+
+    # 좁은 것부터 칠해야 중심부가 유지되고, 바깥 band만 넓은 FOV 색이 남음
+    narrower_union = np.zeros(points_disp.shape[0], dtype=bool)
+
+    for idx in sorted_indices[::-1]:  # narrowest -> widest
+        band_mask = masks[idx] & (~narrower_union)
+        colors_arr[band_mask] = np.array(frustum_colors[idx], dtype=np.float64)
+        narrower_union |= masks[idx]
+
+    pcd.colors = o3d.utility.Vector3dVector(colors_arr)
+    return pcd, sorted_indices, masks
 
 def run_visualization(cfg: Open3DFrustumConfig) -> None:
     points = load_points(cfg.points_path, cfg.points_format)
     points = downsample_points(points, cfg.max_points)
-    pcd = make_point_cloud(points, cfg.voxel_size)
 
     fy_list = cfg.fy_list if cfg.fy_list is not None else cfg.fx_list
     colors = color_palette(len(cfg.fx_list))
+
+    # FOV 계층 색칠된 point cloud 생성
+    pcd, sorted_indices, masks = make_layer_colored_point_cloud(
+        points_lidar=points,
+        cfg=cfg,
+        fx_list=cfg.fx_list,
+        fy_list=fy_list,
+        frustum_colors=colors,
+        outside_color=(0.5, 0.5, 0.5),
+    )
 
     T_lidar_cam = np.linalg.inv(cfg.T_cam_lidar)
 
@@ -380,16 +523,42 @@ def run_visualization(cfg: Open3DFrustumConfig) -> None:
             T_lidar_cam=T_lidar_cam,
             size=cfg.camera_frame_size,
         )
-        geometries.append(cam_frame)  
+        geometries.append(cam_frame)
+
+    print("\n=== Point coloring order (widest -> narrowest) ===")
+    for rank, idx in enumerate(sorted_indices):
+        fx = cfg.fx_list[idx]
+        fy = fy_list[idx]
+        fov_x = fov_deg(cfg.camera.width, fx)
+        fov_y = fov_deg(cfg.camera.height, fy)
+        inside_count = int(masks[idx].sum())
+
+        print(
+            f"[rank {rank}] frustum_idx={idx}, "
+            f"fx={fx:.3f}, fy={fy:.3f}, "
+            f"FOVx={fov_x:.3f}, FOVy={fov_y:.3f}, "
+            f"inside_points={inside_count}, color={colors[idx]}"
+        )
+
+    fy_list = cfg.fy_list if cfg.fy_list is not None else cfg.fx_list
+    colors = color_palette(len(cfg.fx_list))
+
+    frustum_depths = compute_reference_scaled_frustum_depths(
+        fx_list=cfg.fx_list,
+        fy_list=fy_list,
+        ref_depth=cfg.frustum_depth,
+        mode="fx",
+    )
 
     print("\n=== Frustum list ===")
-    for i, (fx, fy, color) in enumerate(zip(cfg.fx_list, fy_list, colors)):
+    for i, (fx, fy, color, depth_i) in enumerate(zip(cfg.fx_list, fy_list, colors, frustum_depths)):
         fov_x = fov_deg(cfg.camera.width, fx)
         fov_y = fov_deg(cfg.camera.height, fy)
 
         print(
             f"[{i}] color={color}  fx={fx:.3f}, fy={fy:.3f}, "
-            f"FOVx={fov_x:.3f} deg, FOVy={fov_y:.3f} deg"
+            f"FOVx={fov_x:.3f} deg, FOVy={fov_y:.3f} deg, "
+            f"depth={depth_i:.3f}"
         )
 
         frustum = make_frustum_lineset_from_T_lidar_cam(
@@ -400,21 +569,25 @@ def run_visualization(cfg: Open3DFrustumConfig) -> None:
             cx=cfg.camera.cx,
             cy=cfg.camera.cy,
             T_lidar_cam=T_lidar_cam,
-            depth=cfg.frustum_depth,
+            depth=depth_i,
             color=color,
         )
         geometries.append(frustum)
 
-        if cfg.add_camera_centers:
-            sphere = make_camera_center_sphere(
-                T_lidar_cam=T_lidar_cam,
-                radius=cfg.camera_center_radius,
-                color=color,
-            )
-            geometries.append(sphere)
+    if cfg.add_camera_centers:
+        sphere = make_camera_center_sphere(
+            T_lidar_cam=T_lidar_cam,
+            radius=cfg.camera_center_radius,
+            color=color,
+        )
+        geometries.append(sphere)
 
     vis = o3d.visualization.Visualizer()
-    vis.create_window(window_name="Open3D Focal Length Frustum Viewer", width=1600, height=900)
+    vis.create_window(
+        window_name="Open3D Focal Length Frustum Viewer",
+        width=1600,
+        height=900,
+    )
     for g in geometries:
         vis.add_geometry(g)
 
