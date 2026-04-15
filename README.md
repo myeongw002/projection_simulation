@@ -1,4 +1,4 @@
-# Projection Simulation
+# Pointcloud Projection Simulator
 
 This project transforms LiDAR point clouds into the camera coordinate frame and compares how they are projected onto the image plane under different focal lengths. It also provides 3D visualization of camera frustums and point clouds using Open3D.
 
