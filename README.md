@@ -2,6 +2,26 @@
 
 LiDAR 포인트 클라우드를 카메라 좌표계로 변환한 뒤, 서로 다른 초점거리(focal length) 조건에서 이미지 평면에 투영해 비교하는 프로젝트입니다. 또한 Open3D를 이용해 카메라 frustum과 포인트 클라우드를 3D로 함께 확인할 수 있습니다.
 
+## 결과 예시
+
+### 2D 투영 결과
+
+아래 이미지는 서로 다른 초점거리에서 같은 포인트 클라우드를 이미지 평면에 투영한 예시입니다.
+
+![fx=700, fy=700](doc/projection_fx_700.0_fy_700.0.png)
+
+![fx=900, fy=900](doc/projection_fx_900.0_fy_900.0.png)
+
+![fx=1100, fy=1100](doc/projection_fx_1100.0_fy_1100.0.png)
+
+![fx=1300, fy=1300](doc/projection_fx_1300.0_fy_1300.0.png)
+
+### 3D frustum 비교
+
+Open3D에서 카메라 frustum과 포인트 클라우드를 함께 확인한 예시입니다.
+
+![Open3D frustum comparison](doc/fov_compare.png)
+
 ## 주요 기능
 
 - 다양한 `fx`, `fy` 조합에 대한 투영 결과를 한 번에 비교
