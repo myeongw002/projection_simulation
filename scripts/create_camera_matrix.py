@@ -71,8 +71,6 @@ class EstimatedCameraParameters:
     dfov_deg: float
     K: List[List[float]]
     distortion_coeffs: List[float]
-    notes: List[str]
-    warnings: List[str]
 
     def to_opencv_dict(self) -> Dict[str, Any]:
         return {
@@ -103,8 +101,6 @@ class EstimatedCameraParameters:
                 "hfov_deg": self.hfov_deg,
                 "vfov_deg": self.vfov_deg,
                 "dfov_deg": self.dfov_deg,
-                "notes": self.notes,
-                "warnings": self.warnings,
             },
         }
 
@@ -163,38 +159,16 @@ class CameraParameterEstimator:
         vfov = cls._fov_deg(sensor_h_mm, lens.focal_length_mm)
         dfov = cls._fov_deg(cls._diag_mm(sensor_w_mm, sensor_h_mm), lens.focal_length_mm)
 
-        notes: List[str] = []
-        warnings: List[str] = []
+        
 
-        notes.append("This result is a datasheet-based initial estimate, not a calibration result.")
-        notes.append("Distortion coefficients are placeholders.")
-        notes.append("Use checkerboard/Charuco calibration for accurate distortion.")
-        notes.append("Extrinsic parameters (R, t) cannot be derived from lens/camera datasheets alone.")
-
-        if camera.pixel_size_um is not None:
-            notes.append(f"Sensor active size computed from pixel size: {camera.pixel_size_um} µm.")
-
-        if lens.min_focus_distance_m is not None:
-            notes.append(
-                f"Lens minimum focus distance is {lens.min_focus_distance_m} m. "
-                "Actual intrinsics may shift slightly with focus position."
-            )
-
-        if camera.lens_mount and lens.mount and camera.lens_mount != lens.mount:
-            warnings.append(
-                f"Mount mismatch: camera={camera.lens_mount}, lens={lens.mount}"
-            )
+        
 
         if lens.nominal_picture_size_mm is not None:
             nominal_w_mm, nominal_h_mm = lens.nominal_picture_size_mm
             rel_w = cls._relative_diff(sensor_w_mm, nominal_w_mm)
             rel_h = cls._relative_diff(sensor_h_mm, nominal_h_mm)
 
-            if rel_w > 0.03 or rel_h > 0.03:
-                warnings.append(
-                    "Camera active sensor size differs from lens nominal picture size. "
-                    "Use actual camera active size for K/FOV calculation."
-                )
+            
 
             hfov_nominal_from_size = cls._fov_deg(nominal_w_mm, lens.focal_length_mm)
             vfov_nominal_from_size = cls._fov_deg(nominal_h_mm, lens.focal_length_mm)
@@ -203,25 +177,7 @@ class CameraParameterEstimator:
                 lens.focal_length_mm
             )
 
-            notes.append(
-                "Lens nominal FOV from nominal picture size: "
-                f"HFOV={hfov_nominal_from_size:.3f}°, "
-                f"VFOV={vfov_nominal_from_size:.3f}°, "
-                f"DFOV={dfov_nominal_from_size:.3f}°."
-            )
-
-        if lens.hfov_deg_nominal is not None:
-            notes.append(f"Lens datasheet nominal HFOV: {lens.hfov_deg_nominal:.3f}°.")
-        if lens.vfov_deg_nominal is not None:
-            notes.append(f"Lens datasheet nominal VFOV: {lens.vfov_deg_nominal:.3f}°.")
-        if lens.dfov_deg_nominal is not None:
-            notes.append(f"Lens datasheet nominal DFOV: {lens.dfov_deg_nominal:.3f}°.")
-        if lens.distortion_tv_percent is not None:
-            notes.append(
-                f"Lens datasheet distortion(TV)={lens.distortion_tv_percent}%. "
-                "This cannot be directly converted into OpenCV k1, k2, p1, p2, k3."
-            )
-
+            
         K = [
             [fx, 0.0, cx],
             [0.0, fy, cy],
@@ -246,8 +202,6 @@ class CameraParameterEstimator:
             dfov_deg=dfov,
             K=K,
             distortion_coeffs=distortion_coeffs,
-            notes=notes,
-            warnings=warnings,
         )
 
 
@@ -377,16 +331,6 @@ def print_result(result: EstimatedCameraParameters) -> None:
     for row in result.K:
         print("  ", row)
     print(f"D = {result.distortion_coeffs}")
-
-    if result.warnings:
-        print("\n[Warnings]")
-        for w in result.warnings:
-            print(f"- {w}")
-
-    if result.notes:
-        print("\n[Notes]")
-        for n in result.notes:
-            print(f"- {n}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
